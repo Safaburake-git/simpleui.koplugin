@@ -22,6 +22,10 @@
 
 local _ = require("gettext")
 local Config = require("config")
+
+-- Lua 5.1 compatibility: unpack is a global; table.unpack was added in 5.2 / LuaJIT compat.
+local _unpack = table.unpack or unpack
+
 local M = {}
 
 -- ---------------------------------------------------------------------------
@@ -29,11 +33,12 @@ local M = {}
 -- ---------------------------------------------------------------------------
 
 M.ITEMS = {
-    { id = "menu_button", label = function() return _("Menu")  end, ctx = "fm"  },
-    { id = "up_button",   label = function() return _("Back")  end, ctx = "fm"  },
-    { id = "title",       label = function() return _("Title") end, ctx = "fm",  no_side = true },
-    { id = "inj_back",    label = function() return _("Menu")  end, ctx = "inj" },
-    { id = "inj_right",   label = function() return _("Close") end, ctx = "inj" },
+    { id = "menu_button",   label = function() return _("Menu")   end, ctx = "fm"  },
+    { id = "up_button",     label = function() return _("Back")   end, ctx = "fm"  },
+    { id = "search_button", label = function() return _("Search") end, ctx = "fm"  },
+    { id = "title",         label = function() return _("Title")  end, ctx = "fm",  no_side = true },
+    { id = "inj_back",      label = function() return _("Menu")   end, ctx = "inj" },
+    { id = "inj_right",     label = function() return _("Close")  end, ctx = "inj" },
 }
 
 -- ---------------------------------------------------------------------------
@@ -48,11 +53,12 @@ local SIZE_KEY    = "simpleui_tb_size"
 local function _visKey(id) return "simpleui_tb_item_" .. id end
 
 local _VIS_DEFAULTS = {
-    menu_button = true,
-    up_button   = true,
-    title       = true,
-    inj_back    = true,
-    inj_right   = false,
+    menu_button   = true,
+    up_button     = true,
+    title         = true,
+    search_button = false,
+    inj_back      = true,
+    inj_right     = false,
 }
 
 function M.isEnabled()   return G_reader_settings:nilOrTrue(SETTING_KEY) end
@@ -79,9 +85,9 @@ function M.getSizeScale() return _SIZE_SCALE[M.getSizeKey()] or 1.0 end
 -- ---------------------------------------------------------------------------
 
 local _FM_DEFAULTS = {
-    side        = { menu_button = "right", up_button = "left" },
+    side        = { menu_button = "right", up_button = "left", search_button = "right" },
     order_left  = { "up_button" },
-    order_right = { "menu_button" },
+    order_right = { "menu_button", "search_button" },
 }
 local _INJ_DEFAULTS = {
     side        = { inj_back = "left", inj_right = "right" },
@@ -91,13 +97,16 @@ local _INJ_DEFAULTS = {
 
 -- Shallow merge of saved config onto defaults — no recursion needed because
 -- the structure is only one level deep (side / order_left / order_right).
+-- When a saved config exists, any items present in the defaults but absent
+-- from the saved order lists are appended so that newly-added buttons always
+-- appear in the Arrange menu rather than being silently lost.
 local function _loadCfg(key, defaults)
     local raw = G_reader_settings:readSetting(key)
     -- No saved config: return a fresh shallow copy of defaults.
     if type(raw) ~= "table" then
         local side = {}
         for k, v in pairs(defaults.side) do side[k] = v end
-        return { side = side, order_left = defaults.order_left, order_right = defaults.order_right }
+        return { side = side, order_left = {_unpack(defaults.order_left)}, order_right = {_unpack(defaults.order_right)} }
     end
     -- Merge: start from defaults, overlay saved values.
     local side = {}
@@ -105,10 +114,31 @@ local function _loadCfg(key, defaults)
     if type(raw.side) == "table" then
         for k, v in pairs(raw.side) do side[k] = v end
     end
+    local order_left  = (type(raw.order_left)  == "table") and raw.order_left  or defaults.order_left
+    local order_right = (type(raw.order_right) == "table") and raw.order_right or defaults.order_right
+    -- Append any default items that are absent from both saved order lists.
+    -- This ensures new buttons (e.g. search_button) become visible in
+    -- Arrange Buttons even when an older saved config predates their addition.
+    local in_saved = {}
+    for _, id in ipairs(order_left)  do in_saved[id] = true end
+    for _, id in ipairs(order_right) do in_saved[id] = true end
+    for _, id in ipairs(defaults.order_right) do
+        if not in_saved[id] then
+            order_right[#order_right + 1] = id
+            -- Inherit the default side assignment if not already set.
+            if not side[id] then side[id] = defaults.side[id] or "right" end
+        end
+    end
+    for _, id in ipairs(defaults.order_left) do
+        if not in_saved[id] then
+            order_left[#order_left + 1] = id
+            if not side[id] then side[id] = defaults.side[id] or "left" end
+        end
+    end
     return {
         side        = side,
-        order_left  = (type(raw.order_left)  == "table") and raw.order_left  or defaults.order_left,
-        order_right = (type(raw.order_right) == "table") and raw.order_right or defaults.order_right,
+        order_left  = order_left,
+        order_right = order_right,
     }
 end
 
@@ -230,9 +260,12 @@ end
 local function _layoutParams(tb)
     local Screen  = require("device").screen
     local scale   = M.getSizeScale()
-    local base_iw = (tb.right_button and tb.right_button.image and tb.right_button.image:getSize().w)
-                 or (tb.left_button  and tb.left_button.image  and tb.left_button.image:getSize().w)
-                 or Screen:scaleBySize(36)
+    local base_iw = Screen:scaleBySize(36)  -- safe default
+    pcall(function()
+        local sz = (tb.right_button and tb.right_button.image and tb.right_button.image:getSize())
+               or  (tb.left_button  and tb.left_button.image  and tb.left_button.image:getSize())
+        if sz and sz.w and sz.w > 0 then base_iw = sz.w end
+    end)
     return {
         iw  = math.floor(base_iw * scale),
         pad = Screen:scaleBySize(18),
@@ -258,14 +291,16 @@ function M.apply(fm_self)
     local iw, pad, gap, sw = lp.iw, lp.pad, lp.gap, lp.sw
 
     -- Read all settings once up front — avoids repeated G_reader_settings hits.
-    local show_menu  = M.isItemVisible("menu_button")
-    local show_up    = M.isItemVisible("up_button")
-    local show_title = M.isItemVisible("title")
+    local show_menu   = M.isItemVisible("menu_button")
+    local show_up     = M.isItemVisible("up_button")
+    local show_search = M.isItemVisible("search_button")
+    local show_title  = M.isItemVisible("title")
 
     local cfg     = M.getFMConfig()
     local visible = {}
-    if show_menu then visible["menu_button"] = true end
-    if show_up   then visible["up_button"]   = true end
+    if show_menu   then visible["menu_button"]   = true end
+    if show_up     then visible["up_button"]     = true end
+    if show_search then visible["search_button"] = true end
     local slot_map = _buildSlotMap(cfg.order_left, cfg.order_right, visible)
 
     local function placeBtn(id, btn)
@@ -325,10 +360,34 @@ function M.apply(fm_self)
 
             local fc = fm_self.file_chooser
             if fc then
-                local BD      = require("ui/bidi")
-                local ICON_UP = BD.mirroredUILayout() and "chevron.right" or "chevron.left"
+                local ICON_UP = "chevron.left"  -- safe default
+                pcall(function()
+                    local BD = require("ui/bidi")
+                    ICON_UP = BD.mirroredUILayout() and "chevron.right" or "chevron.left"
+                end)
 
                 fm_self._titlebar_orig_fc_genItemTable = fc.genItemTable
+
+                -- Build a list of all injected left-side buttons (excluding up_button
+                -- itself) keyed by their configured slot, so we can shift them when
+                -- the back button disappears.  Each entry: { btn, configured_slot }.
+                -- Currently the only injected left-side button is search_button, but
+                -- the logic is generic: any future left button will benefit too.
+                local function _leftSideBtns()
+                    local list = {}
+                    for _, id in ipairs(cfg.order_left) do
+                        if id ~= "up_button" and slot_map[id] and slot_map[id].side == "left" then
+                            -- Find the widget for this id.
+                            local widget = (id == "search_button") and fm_self._titlebar_search_btn or nil
+                            if widget then
+                                list[#list + 1] = { btn = widget, slot = slot_map[id].slot }
+                            end
+                        end
+                    end
+                    return list
+                end
+
+                local up_slot = slot_map["up_button"].slot  -- configured slot of back button
 
                 -- fold_up_cb is built lazily the first time is_sub is true, then
                 -- reused — avoids allocating a new closure on every folder change.
@@ -350,18 +409,33 @@ function M.apply(fm_self)
                     if tb2 and tb2.left_button then
                         local btn = tb2.left_button
                         if is_sub then
-                            -- In a subfolder: show the back button.
+                            -- In a subfolder: show the back button at its configured slot.
                             btn:setIcon(ICON_UP)
                             if not fold_up_cb then
                                 fold_up_cb = function() fc_self:onFolderUp() end
                             end
-                            btn.callback      = fold_up_cb
-                            btn.overlap_offset = { _buttonX(slot_map["up_button"].side, slot_map["up_button"].slot, iw, pad, gap, sw), 0 }
+                            btn.callback       = fold_up_cb
+                            btn.overlap_offset = { _buttonX("left", up_slot, iw, pad, gap, sw), 0 }
+                            -- Restore all other left-side buttons to their configured slots.
+                            for _, entry in ipairs(_leftSideBtns()) do
+                                entry.btn.overlap_offset = {
+                                    _buttonX("left", entry.slot, iw, pad, gap, sw), 0
+                                }
+                            end
                         else
-                            -- At root: hide the button by moving it off-screen.
+                            -- At root: hide the back button off-screen.
                             btn.overlap_offset = { sw + 100, 0 }
                             btn.callback       = function() end
                             btn.hold_callback  = function() end
+                            -- Compact left-side buttons: any button whose configured slot
+                            -- is greater than up_slot shifts one slot to the left.
+                            for _, entry in ipairs(_leftSideBtns()) do
+                                local display_slot = entry.slot > up_slot
+                                    and entry.slot - 1 or entry.slot
+                                entry.btn.overlap_offset = {
+                                    _buttonX("left", display_slot, iw, pad, gap, sw), 0
+                                }
+                            end
                         end
                         UIManager:setDirty(tb2.show_parent or fm_self, "ui", tb2.dimen)
                     end
@@ -373,6 +447,77 @@ function M.apply(fm_self)
             lb.overlap_offset = { sw + 100, 0 }
             lb.callback       = function() end
             lb.hold_callback  = function() end
+        end
+    end
+
+    -- Search button ---------------------------------------------------------
+    -- TitleBar IS an OverlapGroup (OverlapGroup:extend), so we inject the
+    -- new button directly with table.insert(tb, btn), exactly as TitleBar:init()
+    -- does for left_button and right_button.
+    -- Geometry must match _resizeAndStrip behaviour on the other buttons:
+    --   • padding = tb.button_padding (≈11px) so padding_top is preserved after strip
+    --   • _resizeAndStrip zeros padding_left/right/bottom and calls update()
+    --   • overlap_offset y=0 (same as other buttons after placeBtn)
+    if show_search then
+        local ok_ib, IconButton = pcall(require, "ui/widget/iconbutton")
+        if ok_ib and IconButton then
+            local s = slot_map["search_button"]
+            if s then
+                local btn_padding = (tb.button_padding) or Screen:scaleBySize(11)
+                local search_btn = IconButton:new{
+                    icon           = "appbar.search",
+                    width          = iw,
+                    height         = iw,
+                    padding        = btn_padding,
+                    show_parent    = tb.show_parent or fm_self,
+                    callback = function()
+                        local fs = fm_self.filesearcher
+                        if fs and fs.onShowFileSearch then
+                            fs:onShowFileSearch()
+                        end
+                    end,
+                }
+                -- Strip paddings and resize exactly like the other buttons.
+                -- _resizeAndStrip expects btn.image.file (ImageWidget) but our
+                -- button uses IconWidget — resize it directly instead.
+                search_btn.width         = iw
+                search_btn.height        = iw
+                if search_btn.image then
+                    search_btn.image.width  = iw
+                    search_btn.image.height = iw
+                    pcall(search_btn.image.free, search_btn.image)
+                    pcall(search_btn.image.init, search_btn.image)
+                end
+                search_btn.padding_left   = 0
+                search_btn.padding_right  = 0
+                search_btn.padding_bottom = 0
+                -- padding_top is intentionally left as btn_padding (same as other buttons).
+                search_btn:update()
+                search_btn.overlap_align  = nil
+                search_btn.overlap_offset = { _buttonX(s.side, s.slot, iw, pad, gap, sw), 0 }
+                -- TitleBar is itself an OverlapGroup: inject directly.
+                table.insert(tb, search_btn)
+                fm_self._titlebar_search_btn = search_btn
+
+                -- If show_up is also active, detect the initial folder state:
+                -- if already at root (back button hidden), compact left slots now.
+                if show_up and fm_self.file_chooser then
+                    local fc2 = fm_self.file_chooser
+                    local cur = fc2.item_table or {}
+                    local at_root = true
+                    for _, item in ipairs(cur) do
+                        if item.is_go_up or (item.text and item.text:find("\u{2B06}")) then
+                            at_root = false; break
+                        end
+                    end
+                    if at_root and slot_map["search_button"] and slot_map["search_button"].side == "left" then
+                        local up_slot2 = slot_map["up_button"] and slot_map["up_button"].slot or 0
+                        local ss = slot_map["search_button"]
+                        local display_slot = ss.slot > up_slot2 and ss.slot - 1 or ss.slot
+                        search_btn.overlap_offset = { _buttonX("left", display_slot, iw, pad, gap, sw), 0 }
+                    end
+                end
+            end
         end
     end
 
@@ -398,6 +543,15 @@ function M.restore(fm_self)
 
     if tb.left_button then _restoreBtn(tb.left_button, fm_self._titlebar_lb) end
     fm_self._titlebar_lb = nil
+
+    -- Remove the injected search button directly from the TitleBar OverlapGroup.
+    if fm_self._titlebar_search_btn then
+        local btn = fm_self._titlebar_search_btn
+        for i = #tb, 1, -1 do
+            if tb[i] == btn then table.remove(tb, i); break end
+        end
+        fm_self._titlebar_search_btn = nil
+    end
 
     local fc = fm_self.file_chooser
     if fc and fm_self._titlebar_orig_fc_genItemTable then
@@ -496,13 +650,25 @@ end
 -- ---------------------------------------------------------------------------
 
 function M.reapplyAll(fm_self, window_stack)
-    if fm_self then M.reapply(fm_self) end
+    if fm_self then
+        local ok, err = pcall(M.reapply, fm_self)
+        if not ok then
+            local logger = require("logger")
+            logger.warn("simpleui: titlebar.reapplyAll FM failed:", tostring(err))
+        end
+    end
     if type(window_stack) == "table" then
         for _, entry in ipairs(window_stack) do
             local w = entry.widget
             if w and w._titlebar_inj_patched then
-                M.restoreInjected(w)
-                M.applyToInjected(w)
+                local ok, err = pcall(function()
+                    M.restoreInjected(w)
+                    M.applyToInjected(w)
+                end)
+                if not ok then
+                    local logger = require("logger")
+                    logger.warn("simpleui: titlebar.reapplyAll widget failed:", tostring(err))
+                end
             end
         end
     end

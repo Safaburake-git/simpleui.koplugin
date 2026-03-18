@@ -55,6 +55,7 @@ M.ICON = {
     ko_wifi_off    = _KO .. "wifi.open.0.svg",
     ko_menu        = _KO .. "appbar.menu.svg",
     ko_settings    = _KO .. "appbar.settings.svg",
+    ko_search      = _KO .. "appbar.search.svg",
 }
 
 -- Legacy flat constants — kept for any external code that may reference them.

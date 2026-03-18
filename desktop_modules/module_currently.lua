@@ -38,11 +38,21 @@ end
 local COVER_GAP  = Screen:scaleBySize(12)  -- horizontal gap between cover and text column
 local TITLE_GAP  = Screen:scaleBySize(4)   -- below title
 local AUTHOR_GAP = Screen:scaleBySize(8)   -- below author
-local BAR_H      = Screen:scaleBySize(6)   -- progress bar height
+local BAR_H      = Screen:scaleBySize(7)   -- progress bar height (matches reading_goals)
 local BAR_GAP    = Screen:scaleBySize(6)   -- below progress bar
 local PCT_GAP    = Screen:scaleBySize(3)   -- below percentage, before time-left
 
-local _CLR_DARK = Blitbuffer.gray(0.20)
+local _CLR_DARK = Blitbuffer.COLOR_BLACK
+
+local TITLE_MAX_LEN = 60
+
+local function truncateTitle(title)
+    if not title then return title end
+    if #title > TITLE_MAX_LEN then
+        return title:sub(1, TITLE_MAX_LEN) .. "…"
+    end
+    return title
+end
 
 local M = {}
 
@@ -68,7 +78,7 @@ function M.build(w, ctx)
     local meta = VerticalGroup:new{ align = "left" }
 
     meta[#meta+1] = TextBoxWidget:new{
-        text       = bd.title or "?",
+        text       = truncateTitle(bd.title) or "?",
         face       = Font:getFace("smallinfofont", Screen:scaleBySize(12)),
         bold       = true,
         width      = tw,

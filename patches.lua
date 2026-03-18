@@ -167,6 +167,18 @@ function M.patchFileManagerClass(plugin)
 
         plugin:_registerTouchZones(fm_self)
 
+        -- Block non-portrait rotations in the File Manager.
+        -- onSetRotationMode is the event KOReader dispatches when the user or
+        -- a gesture triggers a screen rotation. Returning true here consumes
+        -- the event and prevents the FM from rotating to landscape or inverted
+        -- portrait. The reader is unaffected — it has its own instance and its
+        -- own onSetRotationMode handler is never touched here.
+        -- Screen rotation constants: 0 = portrait, 1 = landscape-left,
+        -- 2 = portrait-inverted, 3 = landscape-right.
+        fm_self.onSetRotationMode = function(_self, mode)
+            if mode ~= 0 then return true end  -- block; portrait passes through
+        end
+
         -- onPathChanged: update the active tab when the user navigates directories.
         -- Skipped when _navbar_suppress_path_change is set — that flag is raised by
         -- programmatic changeToPath calls (tab tap, onShow boot) that already handle
@@ -592,7 +604,13 @@ function M.patchUIManagerShow(plugin)
         -- Build a set for O(1) membership tests — avoids repeated linear scans
         -- over the same tab list for each widget name check below.
         local tabs_set      = tabsToSet(tabs)
-        local action_before = plugin.active_action
+        -- Use the stashed pre-tap action if available (set by onTabTap before
+        -- mutating active_action). This ensures _navbar_prev_action holds the
+        -- tab that was active *before* the tap, not the tab being opened.
+        -- Fall back to active_action for programmatic opens (HS boot, etc.)
+        -- where _navbar_prev_action_pending is not set.
+        local action_before = plugin._navbar_prev_action_pending or plugin.active_action
+        plugin._navbar_prev_action_pending = nil   -- consume immediately
         local effective_action = nil
 
         -- Activate the tab that corresponds to the widget being shown.
@@ -611,6 +629,28 @@ function M.patchUIManagerShow(plugin)
                or (widget.name == "collections" and not Config.isFavoritesWidget(widget)) then
             if tabs_set["collections"] then
                 effective_action = Bottombar.setActiveAndRefreshFM(plugin, "collections", tabs)
+            end
+        end
+
+        -- Hide the native page_return_arrow (Back button) when the widget's
+        -- corresponding tab is absent from the navbar. The arrow is only
+        -- meaningful as "go back to the collections list" — without the tab
+        -- there is no such context to return to, so the button should not show.
+        -- We nil onReturn rather than just hiding the arrow so that
+        -- _recalculateDimen (called on every page turn) cannot re-show it.
+        -- The widget's own _recreate_func restores onReturn on the next open,
+        -- so this nil is scoped to this single injection lifetime.
+        if widget.name == "collections" and not widget._navbar_onreturn_checked then
+            widget._navbar_onreturn_checked = true
+            -- Both favorites and non-favorites collections use onReturn to open
+            -- coll_list (the collections list). The back button is only meaningful
+            -- when the "collections" tab is present — that is the context Back
+            -- navigates to, regardless of whether "favorites" is also a tab.
+            if not tabs_set["collections"] and widget.onReturn then
+                widget.onReturn = nil
+                if widget.page_return_arrow then
+                    widget.page_return_arrow:hide()
+                end
             end
         end
 
@@ -735,6 +775,19 @@ function M.patchUIManagerClose(plugin)
     local function _doShowHS(fm, plugin_ref)
         local HS = package.loaded["homescreen"]
         if not HS or HS._instance then return end
+        -- Re-check the stack at execution time: between the scheduleIn(0) call
+        -- and this function running, a new fullscreen widget (e.g. coll_list
+        -- opened by onReturn after collections closed) may have appeared.
+        -- If any fullscreen widget other than the FM is now on the stack,
+        -- abort — we are not returning to a bare FM.
+        local live_fm2 = package.loaded["apps/filemanager/filemanager"]
+        live_fm2 = live_fm2 and live_fm2.instance
+        for _i, entry in ipairs(UI.getWindowStack()) do
+            local w = entry.widget
+            if w and w ~= (live_fm2 or fm) and w.covers_fullscreen then
+                return  -- another fullscreen widget is open; don't re-open HS
+            end
+        end
         local stack    = UI.getWindowStack()
         local to_close = {}
         for _i, entry in ipairs(stack) do
@@ -773,10 +826,14 @@ function M.patchUIManagerClose(plugin)
         -- FM has no name field at class level (name = "filemanager" belongs to its
         -- FileChooser child), so widget.name is nil — we identify it by identity.
         local widget_is_fm = (widget == plugin.ui)
-
         -- Restore the active tab when a SimpleUI-injected widget closes normally
         -- (not via intentional tab navigation).
+        -- _navbar_injected is cleared immediately after processing so that a
+        -- second close() on the same widget (e.g. from the native close_callback
+        -- running after Menu:onCloseAllMenus already called UIManager:close)
+        -- is a no-op — preventing double restoreTabInFM + double setDirty.
         if widget._navbar_injected and not widget._navbar_closing_intentionally then
+            widget._navbar_injected = nil   -- consume: makes re-entry a no-op
             -- coll_list sits on top of collections; restoreTabInFM would skip it
             -- because another injected widget is still on the stack. Find the
             -- prev_action on the underlying collections widget instead.

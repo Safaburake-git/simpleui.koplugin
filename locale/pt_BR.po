@@ -623,3 +623,24 @@ msgstr "Título"
 
 msgid "Title Bar"
 msgstr "Barra de Título"
+
+msgid "Search"
+msgstr "Pesquisar"
+
+msgid "Delete quick action \"%s\"?"
+msgstr "Excluir a ação rápida \"%s\"?"
+
+msgid "Show Date"
+msgstr "Mostrar Data"
+
+msgid "Show Battery"
+msgstr "Mostrar Bateria"
+
+msgid "Cards"
+msgstr "Cartões"
+
+msgid "List"
+msgstr "Lista"
+
+msgid "Cover for \"%s\""
+msgstr "Capa de \"%s\""

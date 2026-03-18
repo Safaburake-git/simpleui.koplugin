@@ -116,17 +116,20 @@ local function getGoalStats(shared_conn)
                 WHERE start_time >= %d GROUP BY id_book, page);]], today_start))
         today_secs = tonumber(rt) or 0
 
-        -- Live ratio from the page_stat VIEW (rescales to current book.pages),
-        -- avoids the stale book.total_read_pages snapshot that can diverge when
-        -- a file is updated/re-indexed after the last reading session.
-        local tb = conn:rowexec([[
+        -- Count books finished this year only: filter page_stat to year_start
+        -- so only reading sessions from 1 Jan onwards are considered.
+        -- A book counts if ≥90% of its pages were read (distinct pages counted,
+        -- or max page reached) within those sessions — matches the annual goal.
+        local tb = conn:rowexec(string.format([[
             SELECT count(*) FROM (
                 SELECT b.id FROM book b
                 JOIN page_stat ps ON ps.id_book = b.id
                 WHERE b.pages > 0
+                  AND ps.start_time >= %d
                 GROUP BY b.id
                 HAVING count(DISTINCT ps.page) * 1.0 / b.pages >= 0.90
-            )]])
+                    OR MAX(CAST(ps.page AS INTEGER)) * 1.0 / b.pages >= 0.90
+            )]], year_start))
         books_read = tonumber(tb) or 0
     end)
     if not ok then logger.warn("simpleui: reading_goals: getGoalStats failed: " .. tostring(err)) end

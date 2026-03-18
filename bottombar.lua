@@ -13,7 +13,8 @@ local Geom            = require("ui/geometry")
 local Font            = require("ui/font")
 local Blitbuffer      = require("ffi/blitbuffer")
 local UIManager       = require("ui/uimanager")
-local InfoMessage     = require("ui/widget/infomessage")
+local _InfoMessage
+local function InfoMessage() _InfoMessage = _InfoMessage or require("ui/widget/infomessage"); return _InfoMessage end
 local Device          = require("device")
 local Screen          = Device.screen
 local logger          = require("logger")
@@ -392,7 +393,7 @@ end
 -- ---------------------------------------------------------------------------
 
 local function showUnavailable(msg)
-    UIManager:show(InfoMessage:new{ text = msg, timeout = 3 })
+    UIManager:show(InfoMessage():new{ text = msg, timeout = 3 })
 end
 
 local function setActiveAndRefreshFM(plugin, action_id, tabs)
@@ -539,9 +540,15 @@ function M.navigate(plugin, action_id, fm_self, tabs, force)
         end
         if not home then return false end
         if fc.path == home then
-            -- Already at home: reset to page 1 and refresh content.
+            -- Already at home. Always go to page 1 and refresh — this mirrors
+            -- the "Go to HOME folder" button behaviour: if the user is on a
+            -- sub-page of the library, tapping the tab again scrolls back to
+            -- the top. Suppress onPathChanged in both cases (re-tap and
+            -- cross-tab) because the bar was already rebuilt by onTabTap.
+            target_fm._navbar_suppress_path_change = true
             pcall(function() fc:onGotoPage(1) end)
             pcall(function() fc:refreshPath() end)
+            target_fm._navbar_suppress_path_change = nil
         else
             target_fm._navbar_suppress_path_change = true
             fc:changeToPath(home)
@@ -610,8 +617,6 @@ function M.navigate(plugin, action_id, fm_self, tabs, force)
             if live_fm.file_chooser then
                 UIManager:setDirty(live_fm, "partial")
             end
-        elseif force then
-            UIManager:setDirty(live_fm, "partial")
         end
 
     elseif action_id == "collections" then
@@ -723,12 +728,12 @@ end
 function M.doWifiToggle(plugin)
     local ok_hw, has_wifi = pcall(function() return Device:hasWifiToggle() end)
     if not (ok_hw and has_wifi) then
-        UIManager:show(InfoMessage:new{ text = _("WiFi not available on this device."), timeout = 2 })
+        UIManager:show(InfoMessage():new{ text = _("WiFi not available on this device."), timeout = 2 })
         return
     end
     local ok_nm, NetworkMgr = pcall(require, "ui/network/manager")
     if not ok_nm or not NetworkMgr then
-        UIManager:show(InfoMessage:new{ text = _("Network manager unavailable."), timeout = 2 })
+        UIManager:show(InfoMessage():new{ text = _("Network manager unavailable."), timeout = 2 })
         return
     end
     local ok_state, wifi_on = pcall(function() return NetworkMgr:isWifiOn() end)
@@ -736,7 +741,7 @@ function M.doWifiToggle(plugin)
     if wifi_on then
         Config.wifi_optimistic = false
         pcall(function() NetworkMgr:turnOffWifi() end)
-        UIManager:show(InfoMessage:new{ text = _("Wi-Fi off"), timeout = 1 })
+        UIManager:show(InfoMessage():new{ text = _("Wi-Fi off"), timeout = 1 })
     else
         Config.wifi_optimistic = true
         local ok_on, err = pcall(function() NetworkMgr:turnOnWifi() end)
@@ -767,7 +772,7 @@ end
 function M.showFrontlightDialog()
     local ok_f, has_fl = pcall(function() return Device:hasFrontlight() end)
     if not ok_f or not has_fl then
-        UIManager:show(InfoMessage:new{
+        UIManager:show(InfoMessage():new{
             text = _("Frontlight not available on this device."), timeout = 2,
         })
         return
@@ -899,11 +904,25 @@ function M.showPowerDialog(plugin)
     if plugin._power_dialog then return end  -- guard: ignore double-tap
     local ButtonDialog = require("ui/widget/buttondialog")
     local dialog_w = math.floor(Screen:getWidth() * 0.42)
+    -- Capture the active tab before opening the dialog so Cancel/close can
+    -- restore the bar indicator to the correct state.
+    local prev_action = plugin.active_action
+
     -- _clear is the single point of cleanup for plugin._power_dialog.
     -- It is called from onCloseWidget (fires on every close path, including
     -- programmatic UIManager:close() calls) so the guard is always released
     -- regardless of how the dialog disappears.
-    local function _clear() plugin._power_dialog = nil end
+    -- _quitting is set by the Restart/Quit callbacks so _clear skips the
+    -- bar restore on those paths (the app is about to exit anyway).
+    local _quitting = false
+    local function _clear()
+        plugin._power_dialog = nil
+        if _quitting then return end
+        -- Restore the bar to whichever tab was active before the dialog opened.
+        -- This covers Cancel, tapping outside, and the Back key — all paths
+        -- that do not quit/restart and therefore need the indicator restored.
+        M.setPowerTabActive(plugin, false, prev_action)
+    end
     plugin._power_dialog = ButtonDialog:new{
         width = dialog_w,
         -- tap_close_callback covers taps outside the dialog and the physical
@@ -913,6 +932,7 @@ function M.showPowerDialog(plugin)
         onCloseWidget      = _clear,
         buttons = {
             {{ text = _("Restart"), callback = function()
+                _quitting = true
                 local d = plugin._power_dialog
                 plugin._power_dialog = nil
                 UIManager:close(d)
@@ -922,6 +942,7 @@ function M.showPowerDialog(plugin)
                 UIManager:quit((ok_exit and ExitCode and ExitCode.restart) or 85)
             end }},
             {{ text = _("Quit"), callback = function()
+                _quitting = true
                 local d = plugin._power_dialog
                 plugin._power_dialog = nil
                 UIManager:close(d)
@@ -932,6 +953,7 @@ function M.showPowerDialog(plugin)
                 local d = plugin._power_dialog
                 plugin._power_dialog = nil
                 UIManager:close(d)
+                -- Bar restore is handled by onCloseWidget → _clear().
             end }},
         },
     }

@@ -621,3 +621,24 @@ msgstr ""
 
 msgid "Title Bar"
 msgstr ""
+
+msgid "Search"
+msgstr ""
+
+msgid "Delete quick action \"%s\"?"
+msgstr ""
+
+msgid "Show Date"
+msgstr ""
+
+msgid "Show Battery"
+msgstr ""
+
+msgid "Cards"
+msgstr ""
+
+msgid "List"
+msgstr ""
+
+msgid "Cover for \"%s\""
+msgstr ""

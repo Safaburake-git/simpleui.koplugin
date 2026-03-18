@@ -11,6 +11,8 @@ local GestureRange    = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan  = require("ui/widget/horizontalspan")
 local InputContainer  = require("ui/widget/container/inputcontainer")
+local LineWidget      = require("ui/widget/linewidget")
+local OverlapGroup    = require("ui/widget/overlapgroup")
 local TextWidget      = require("ui/widget/textwidget")
 local UIManager       = require("ui/uimanager")
 local VerticalGroup   = require("ui/widget/verticalgroup")
@@ -26,13 +28,22 @@ local MOD_GAP = UI.MOD_GAP
 local LABEL_H = UI.LABEL_H
 
 local _CLR_TEXT_BLK  = Blitbuffer.COLOR_BLACK
-
 local _CLR_CARD_BDR  = Blitbuffer.gray(0.72)
 
 local RS_CORNER_R = Screen:scaleBySize(12)
 local RS_GAP      = Screen:scaleBySize(12)
 local RS_CARD_H   = Screen:scaleBySize(96)
 local RS_N_COLS   = 3
+
+local SETTING_TYPE = "reading_stats_type"   -- suffix: pfx .. "reading_stats_type"
+
+local function getType(pfx)
+    return G_reader_settings:readSetting(pfx .. SETTING_TYPE) or "cards"
+end
+
+-- Font faces cached at module load time.
+local _FACE_VAL = Font:getFace("smallinfofont", Screen:scaleBySize(22))
+local _FACE_LBL = Font:getFace("cfont",         Screen:scaleBySize(8))
 
 -- ---------------------------------------------------------------------------
 -- Stat map
@@ -179,9 +190,11 @@ local function getStats(shared_conn, force)
 end
 
 -- ---------------------------------------------------------------------------
--- Stat card widget
+-- Stat widget builders
 -- ---------------------------------------------------------------------------
-local function buildStatCard(card_w, stat_id, stats)
+
+-- Cards mode: rounded border, content centred inside the card.
+local function buildStatCardWidget(card_w, stat_id, stats)
     local entry = STAT_MAP[stat_id]
     if not entry then return nil end
     local val_str = entry.value(stats)
@@ -195,21 +208,71 @@ local function buildStatCard(card_w, stat_id, stats)
         padding    = 0,
         CenterContainer:new{
             dimen = Geom:new{ w = card_w, h = RS_CARD_H },
-            VerticalGroup:new{ align = "left",
+            VerticalGroup:new{ align = "center",
                 TextWidget:new{
                     text    = val_str,
-                    face    = Font:getFace("smallinfofont", Screen:scaleBySize(16)),
+                    face    = _FACE_VAL,
                     bold    = true,
                     fgcolor = _CLR_TEXT_BLK,
                 },
                 TextWidget:new{
                     text    = lbl_str,
-                    face    = Font:getFace("cfont", Screen:scaleBySize(8)),
+                    face    = _FACE_LBL,
                     fgcolor = CLR_TEXT_SUB,
                 },
             },
         },
     }
+end
+
+-- List mode: no border, left-aligned value + label, vertical separator on
+-- the left edge of every cell except the first (drawn by the row builder).
+-- List mode: identical to Cards but left-aligned content, right border only,
+-- no rounded corners. Uses an OverlapGroup to paint the right border line on
+-- top of the card without needing per-side border support in FrameContainer.
+local _RS_SEP_W_PX = Screen:scaleBySize(1)
+local function buildStatListCell(cell_w, stat_id, stats, show_sep)
+    local entry = STAT_MAP[stat_id]
+    if not entry then return nil end
+    local val_str = entry.value(stats)
+    local lbl_str = entry.label_fn and entry.label_fn(stats) or entry.label
+
+    local card = FrameContainer:new{
+        dimen      = Geom:new{ w = cell_w, h = RS_CARD_H },
+        bordersize = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        padding    = 0,
+        CenterContainer:new{
+            dimen = Geom:new{ w = cell_w, h = RS_CARD_H },
+            VerticalGroup:new{ align = "left",
+                TextWidget:new{
+                    text    = val_str,
+                    face    = _FACE_VAL,
+                    bold    = true,
+                    fgcolor = _CLR_TEXT_BLK,
+                },
+                TextWidget:new{
+                    text    = lbl_str,
+                    face    = _FACE_LBL,
+                    fgcolor = CLR_TEXT_SUB,
+                },
+            },
+        },
+    }
+
+    local og = OverlapGroup:new{
+        dimen = Geom:new{ w = cell_w, h = RS_CARD_H },
+        card,
+    }
+    if show_sep then
+        local sep = LineWidget:new{
+            dimen      = Geom:new{ w = _RS_SEP_W_PX, h = RS_CARD_H },
+            background = _CLR_CARD_BDR,
+        }
+        sep.overlap_offset = { cell_w - _RS_SEP_W_PX, 0 }
+        og[#og+1] = sep
+    end
+    return og
 end
 
 local function openReaderProgress()
@@ -261,71 +324,85 @@ function M.build(w, ctx)
     if not M.isEnabled(ctx.pfx) then return nil end
     local stat_ids = G_reader_settings:readSetting(ctx.pfx .. "reading_stats_items") or {}
 
-    -- Show a placeholder when enabled but no stats have been selected yet,
-    -- consistent with the empty-state pattern used by other modules.
+    -- Show a placeholder when enabled but no stats have been selected yet.
     if #stat_ids == 0 then
-        local CenterContainer = require("ui/widget/container/centercontainer")
-        local TextWidget      = require("ui/widget/textwidget")
-        local Font            = require("ui/font")
-        local Geom            = require("ui/geometry")
-        local Device          = require("device")
         return CenterContainer:new{
             dimen = Geom:new{ w = w, h = RS_CARD_H },
             TextWidget:new{
                 text    = _("No stats selected"),
-                face    = Font:getFace("smallinfofont", Device.screen:scaleBySize(11)),
+                face    = Font:getFace("smallinfofont", Screen:scaleBySize(11)),
                 fgcolor = CLR_TEXT_SUB,
                 width   = w - PAD * 2,
             },
         }
     end
 
-    local n       = math.min(#stat_ids, RS_N_COLS)
-    local avail_w = w - PAD * 2
-    -- Use n (actual count) not RS_N_COLS for card width — so 1 or 2 cards
-    -- fill the available space proportionally instead of being card-width-of-3.
-    local card_w  = math.floor((avail_w - RS_GAP * (n - 1)) / n)
-    local row     = HorizontalGroup:new{ align = "center" }
+    local n      = math.min(#stat_ids, RS_N_COLS)
+    local stats  = getStats(ctx.db_conn)
+    local mode   = getType(ctx.pfx)
+    local row    = HorizontalGroup:new{ align = "center" }
 
-    -- Fetch stats once, pass to each card builder.
-    -- ctx.db_conn is the shared connection opened by homescreen._buildContent();
-    -- pass it through so that on a cache miss fetchAllStats reuses it instead
-    -- of opening its own. On a cache hit the connection is never touched.
-    local stats = getStats(ctx.db_conn)
+    if mode == "list" then
+        -- List mode: cells fill the full width divided equally, with vertical
+        -- separators between them. No outer padding — the separators act as
+        -- visual boundaries and the cells carry their own RS_LIST_PAD.
+        -- List mode: equal-width cells filling the full width.
+        -- Each cell has a right border painted internally via OverlapGroup.
+        local cell_w = math.floor(w / n)
+        for i = 1, n do
+            local cell = buildStatListCell(cell_w, stat_ids[i], stats, i < n)
+                      or OverlapGroup:new{
+                             dimen = Geom:new{ w = cell_w, h = RS_CARD_H },
+                         }
+            local tappable = InputContainer:new{
+                dimen = Geom:new{ w = cell_w, h = RS_CARD_H },
+                [1]   = cell,
+            }
+            tappable.ges_events = {
+                TapStatCard = { GestureRange:new{ ges = "tap", range = function() return tappable.dimen end } },
+            }
+            function tappable:onTapStatCard() openReaderProgress(); return true end
+            row[#row+1] = tappable
+        end
 
-    for i = 1, n do
-        local card_content = buildStatCard(card_w, stat_ids[i], stats)
-            or FrameContainer:new{
-                   dimen      = Geom:new{ w = card_w, h = RS_CARD_H },
-                   bordersize = 0, padding = 0,
-               }
-        local tappable = InputContainer:new{
-            dimen = Geom:new{ w = card_w, h = RS_CARD_H },
-            [1]   = card_content,
+        return FrameContainer:new{
+            dimen       = Geom:new{ w = w, h = LABEL_H + RS_CARD_H },
+            bordersize  = 0, padding = 0,
+            padding_top = LABEL_H,
+            row,
         }
-        tappable.ges_events = {
-            TapStatCard = {
-                GestureRange:new{
-                    ges   = "tap",
-                    range = function() return tappable.dimen end,
-                },
+    else
+        -- Cards mode: rounded bordered cards with gaps between them.
+        local avail_w = w - PAD * 2
+        local card_w  = math.floor((avail_w - RS_GAP * (n - 1)) / n)
+        for i = 1, n do
+            local card = buildStatCardWidget(card_w, stat_ids[i], stats)
+                      or FrameContainer:new{
+                             dimen = Geom:new{ w = card_w, h = RS_CARD_H },
+                             bordersize = 0, padding = 0,
+                         }
+            local tappable = InputContainer:new{
+                dimen = Geom:new{ w = card_w, h = RS_CARD_H },
+                [1]   = card,
+            }
+            tappable.ges_events = {
+                TapStatCard = { GestureRange:new{ ges = "tap", range = function() return tappable.dimen end } },
+            }
+            function tappable:onTapStatCard() openReaderProgress(); return true end
+            if i > 1 then row[#row+1] = HorizontalSpan:new{ width = RS_GAP } end
+            row[#row+1] = tappable
+        end
+
+        return FrameContainer:new{
+            dimen       = Geom:new{ w = w, h = LABEL_H + RS_CARD_H },
+            bordersize  = 0, padding = 0,
+            padding_top = LABEL_H,
+            CenterContainer:new{
+                dimen = Geom:new{ w = w, h = RS_CARD_H },
+                row,
             },
         }
-        function tappable:onTapStatCard()
-            openReaderProgress(); return true
-        end
-        if i > 1 then row[#row+1] = HorizontalSpan:new{ width = RS_GAP } end
-        row[#row+1] = tappable
     end
-
-    return FrameContainer:new{
-        bordersize  = 0, padding = 0,
-        padding_top = LABEL_H,
-        CenterContainer:new{
-            dimen = Geom:new{ w = w, h = RS_CARD_H },
-            row,
-        },
-    }
 end
 
 function M.getHeight(_ctx)
@@ -361,6 +438,31 @@ function M.getMenuItems(ctx_menu)
     end
 
     local items = {
+        {
+            text           = _lc("Type"),
+            sub_item_table = {
+                {
+                    text           = _lc("Cards"),
+                    radio          = true,
+                    keep_menu_open = true,
+                    checked_func   = function() return getType(pfx) == "cards" end,
+                    callback       = function()
+                        G_reader_settings:saveSetting(pfx .. SETTING_TYPE, "cards")
+                        refresh()
+                    end,
+                },
+                {
+                    text           = _lc("List"),
+                    radio          = true,
+                    keep_menu_open = true,
+                    checked_func   = function() return getType(pfx) == "list" end,
+                    callback       = function()
+                        G_reader_settings:saveSetting(pfx .. SETTING_TYPE, "list")
+                        refresh()
+                    end,
+                },
+            },
+        },
         { text = _lc("Arrange"), keep_menu_open = true, separator = true, callback = function()
             local rs_ids = getItems()
             if #rs_ids < 2 then

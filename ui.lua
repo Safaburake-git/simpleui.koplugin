@@ -44,7 +44,7 @@ M.LABEL_H       = M.LABEL_PAD_TOP + M.LABEL_PAD_BOT + M.LABEL_TEXT_H
 
 -- Shared secondary text colour used across all desktop modules.
 -- Edit this single value to retheme every module at once.
-M.CLR_TEXT_SUB  = Blitbuffer.gray(0.50)
+M.CLR_TEXT_SUB  = Blitbuffer.COLOR_BLACK
 
 -- ---------------------------------------------------------------------------
 -- Shared menu-item resolver

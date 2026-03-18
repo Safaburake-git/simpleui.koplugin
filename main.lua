@@ -211,22 +211,32 @@ local menu_module_loaded = false
 function SimpleUIPlugin:addToMainMenu(menu_items)
     if not menu_module_loaded then
         menu_module_loaded = true
+        -- Capture the stub reference NOW, before the installer overwrites it.
+        -- The installer sets SimpleUIPlugin.addToMainMenu = new_fn (rawset on the
+        -- class), so after require("menu") both rawget(SimpleUIPlugin, ...) and
+        -- self.addToMainMenu resolve to the same new function — comparing them
+        -- would always be equal and the menu would never open.
+        -- Comparing against the stub captured here is the correct check.
+        local stub_fn = rawget(SimpleUIPlugin, "addToMainMenu")
+        -- Clear any stale cached result from a previous failed load so that
+        -- require("menu") always re-executes the installer on retry.
+        package.loaded["menu"] = nil
         local ok, err = pcall(function() require("menu")(SimpleUIPlugin) end)
         if not ok then
             menu_module_loaded = false
+            package.loaded["menu"] = nil  -- allow clean retry next time
             logger.err("simpleui: menu.lua failed to load: " .. tostring(err))
             menu_items.simpleui = { sorting_hint = "tools", text = "Simple UI", sub_item_table = {} }
             return
         end
-        -- The installer replaces addToMainMenu on SimpleUIPlugin. If it did not
-        -- (e.g. menu.lua ran without error but returned early due to an internal
-        -- failure on low-memory devices), log the fault and show a stub entry
-        -- rather than silently producing a menu that opens nothing.
+        -- Verify the installer actually replaced addToMainMenu by comparing
+        -- the new raw slot against the stub we captured before the require.
         local real_fn = rawget(SimpleUIPlugin, "addToMainMenu")
-        if type(real_fn) == "function" and real_fn ~= SimpleUIPlugin.addToMainMenu then
+        if type(real_fn) == "function" and real_fn ~= stub_fn then
             real_fn(self, menu_items)
         else
             menu_module_loaded = false
+            package.loaded["menu"] = nil
             logger.err("simpleui: menu installer did not replace addToMainMenu — opening menu aborted")
             menu_items.simpleui = { sorting_hint = "tools", text = "Simple UI", sub_item_table = {} }
         end

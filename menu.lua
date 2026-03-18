@@ -270,7 +270,6 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
                     plugin:_scheduleRebuild()
                 end,
             }
-            ::continue_action::
         end
         table.sort(toggle_items, function(a, b) return a._base:lower() < b._base:lower() end)
         for _i, item in ipairs(toggle_items) do items[#items + 1] = item end
@@ -394,7 +393,7 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
                 end,
             }
         end
-        items[#items].separator = true
+        if #items > 0 then items[#items].separator = true end
 
         items[#items + 1] = {
             text           = _("Arrange Items"),
@@ -500,7 +499,7 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
                     topbarSizeItem(_("Large"),   "large"),
                 },
             },
-            { text = _("Items"), sub_item_table = makeTopbarItemsMenu() },
+            { text = _("Items"), sub_item_table_func = makeTopbarItemsMenu },
         }
     end
 
@@ -701,7 +700,7 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
     local function makeTitleBarFMMenu()
         local Titlebar = require("titlebar")
         local items = makeTitleBarItemsForCtx("fm")
-        items[#items].separator = true
+        if #items > 0 then items[#items].separator = true end
         items[#items + 1] = {
             text           = _("Arrange Buttons"),
             enabled_func   = function() return Titlebar.isEnabled() end,
@@ -716,7 +715,7 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
     local function makeTitleBarInjMenu()
         local Titlebar = require("titlebar")
         local items = makeTitleBarItemsForCtx("inj")
-        items[#items].separator = true
+        if #items > 0 then items[#items].separator = true end
         items[#items + 1] = {
             text           = _("Arrange Buttons"),
             enabled_func   = function() return Titlebar.isEnabled() end,
@@ -753,23 +752,19 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
                     local Titlebar = require("titlebar")
                     local on = Titlebar.isEnabled()
                     Titlebar.setEnabled(not on)
-                    if on then
-                        G_reader_settings:flush()
-                        UIManager:show(ConfirmBox():new{
-                            text = string.format(
-                                _("Custom Title Bar will be %s after restart.\n\nRestart now?"),
-                                _("disabled")
-                            ),
-                            ok_text     = _("Restart"),
-                            cancel_text = _("Later"),
-                            ok_callback = function()
-                                local ok_exit, ExitCode = pcall(require, "exitcode")
-                                UIManager:quit((ok_exit and ExitCode and ExitCode.restart) or 85)
-                            end,
-                        })
-                    else
-                        _reapplyAllTitlebars()
-                    end
+                    G_reader_settings:flush()
+                    UIManager:show(ConfirmBox():new{
+                        text = string.format(
+                            _("Custom Title Bar will be %s after restart.\n\nRestart now?"),
+                            on and _("disabled") or _("enabled")
+                        ),
+                        ok_text     = _("Restart"),
+                        cancel_text = _("Later"),
+                        ok_callback = function()
+                            local ok_exit, ExitCode = pcall(require, "exitcode")
+                            UIManager:quit((ok_exit and ExitCode and ExitCode.restart) or 85)
+                        end,
+                    })
                 end,
             },
             {
@@ -911,15 +906,24 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
     local function _scanDispatcherActions()
         local ok_d, Dispatcher = pcall(require, "dispatcher")
         if not ok_d or not Dispatcher then return {} end
+        -- init() may error on some devices/versions — ignore failures.
         pcall(function() Dispatcher:init() end)
         local settingsList, dispatcher_menu_order
-        local fn_idx = 1
-        while true do
-            local name, val = debug.getupvalue(Dispatcher.registerAction, fn_idx)
-            if not name then break end
-            if name == "settingsList"          then settingsList          = val end
-            if name == "dispatcher_menu_order" then dispatcher_menu_order = val end
-            fn_idx = fn_idx + 1
+        -- Walk upvalues to find the internal tables. debug.getupvalue is
+        -- version-sensitive — guard against nil name (end of upvalue list)
+        -- and against the target variables never being found.
+        local ok_uv, uv_err = pcall(function()
+            local fn_idx = 1
+            while true do
+                local name, val = debug.getupvalue(Dispatcher.registerAction, fn_idx)
+                if not name then break end
+                if name == "settingsList"          then settingsList          = val end
+                if name == "dispatcher_menu_order" then dispatcher_menu_order = val end
+                fn_idx = fn_idx + 1
+            end
+        end)
+        if not ok_uv then
+            logger.warn("simpleui: _scanDispatcherActions: upvalue scan failed: " .. tostring(uv_err))
         end
         if type(settingsList) ~= "table" then return {} end
         local order = (type(dispatcher_menu_order) == "table" and dispatcher_menu_order)
@@ -1376,18 +1380,28 @@ SimpleUIPlugin.addToMainMenu = function(self, menu_items)
         end
 
         -- ctx_menu passed to each module's getMenuItems()
-        local ctx_menu = {
+        -- InfoMessage and SortWidget are resolved lazily on first access via
+        -- __index so that require("ui/widget/...") is deferred until the user
+        -- actually opens a module settings menu, not when makeModulesMenu runs.
+        local ctx_menu_data = {
             pfx           = ctx.pfx,
             pfx_qa        = ctx.pfx_qa,
             refresh       = ctx.refresh,
             UIManager     = UIManager,
-            InfoMessage   = InfoMessage(),
-            SortWidget    = SortWidget(),
             _             = _,
             MAX_LABEL_LEN = MAX_LABEL_LEN,
             makeQAMenu    = makeQAMenu,
             _cover_picker = nil,
         }
+        local ctx_menu = setmetatable(ctx_menu_data, {
+            __index = function(t, k)
+                if k == "InfoMessage" then
+                    local v = InfoMessage(); rawset(t, k, v); return v
+                elseif k == "SortWidget" then
+                    local v = SortWidget(); rawset(t, k, v); return v
+                end
+            end,
+        })
 
         local function loadOrder()
             local saved   = G_reader_settings:readSetting(ctx.pfx .. "module_order")
