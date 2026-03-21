@@ -1259,10 +1259,15 @@ function M.installAll(plugin)
     M.patchUIManagerClose(plugin)
     M.patchMenuInitForPagination(plugin)
     M.patchMenuForNavpager(plugin)
-    -- Folder covers + uniform proportions: patch MosaicMenuItem and MosaicMenu
-    -- unconditionally. Both features check their own settings per cell/call.
+    -- Folder covers: only install when the feature is enabled.
+    -- Installing unconditionally wraps MosaicMenuItem.update even when FC is
+    -- disabled, hiding the BookInfoManager upvalue from subsequent
+    -- userpatch.getUpValue() calls made by third-party user-patches (such as
+    -- 2-browser-folder-cover.lua).  When FC is disabled we leave
+    -- MosaicMenuItem.update untouched so those patches work correctly.
+    -- FC.install() is also called from sui_menu.lua when the toggle is turned on.
     local ok_fc, FC = pcall(require, "sui_foldercovers")
-    if ok_fc and FC then
+    if ok_fc and FC and FC.isEnabled() then
         pcall(FC.install)
     end
 end
