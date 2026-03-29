@@ -70,6 +70,7 @@ local SK = {
     item_cache       = "simpleui_fc_item_cache",
     -- Subfolder Cover
     subfolder_cover  = "simpleui_fc_subfolder_cover",  
+    recursive_cover  = "simpleui_fc_recursive_cover",
 }
 
 local M = {}
@@ -138,7 +139,9 @@ function M.setItemCache(v) _setFlag(SK.item_cache, v) end
 -- Subfolder Cover (default off)
 function M.getSubfolderCover() return G_reader_settings:isTrue(SK.subfolder_cover) end
 function M.setSubfolderCover(v) _setFlag(SK.subfolder_cover, v) end
-
+-- Scan subfolder recursively for cover (default off)
+function M.getRecursiveCover() return G_reader_settings:isTrue(SK.recursive_cover) end
+function M.setRecursiveCover(v) _setFlag(SK.recursive_cover, v) end
 -- ---------------------------------------------------------------------------
 -- Cover file discovery — identical to original patch
 -- ---------------------------------------------------------------------------
@@ -556,6 +559,43 @@ end
 -- Public API
 -- ---------------------------------------------------------------------------
 
+-- Scans dir_path recursively up to max_depth levels looking for a cached book cover.
+-- BookInfoManager is passed in to avoid a module-level require.
+local function _findCoverRecursive(menu, dir_path, depth, max_depth, BookInfoManager)
+    if depth > max_depth then return nil end
+
+    menu._dummy = true
+    local entries = menu:genItemTableFromPath(dir_path)
+    menu._dummy = false
+    if not entries then return nil end
+
+    -- First pass: try files at this level
+    for _, entry in ipairs(entries) do
+        if entry.is_file or entry.file then
+            local bookinfo = BookInfoManager:getBookInfo(entry.path, true)
+            if bookinfo
+                and bookinfo.cover_bb
+                and bookinfo.has_cover
+                and bookinfo.cover_fetched
+                and not bookinfo.ignore_cover
+                and not BookInfoManager.isCachedCoverInvalid(bookinfo, menu.cover_specs)
+            then
+                return { data = bookinfo.cover_bb, w = bookinfo.cover_w, h = bookinfo.cover_h }
+            end
+        end
+    end
+
+    -- Second pass: recurse into subfolders
+    for _, entry in ipairs(entries) do
+        if not entry.is_file and not entry.file then
+            local found = _findCoverRecursive(menu, entry.path, depth + 1, max_depth, BookInfoManager)
+            if found then return found end
+        end
+    end
+
+    return nil
+end
+
 function M.install()
     local MosaicMenuItem, userpatch = _getMosaicMenuItemAndPatch()
     if not MosaicMenuItem then return end
@@ -716,9 +756,16 @@ function M.install()
             end
         end
 
-        -- No book cover found: fall back to folder icon if only subfolders
+        -- No direct ebooks found: try to find a cover by scanning subfolders
+        -- recursively (up to 3 levels), then fall back to the placeholder cover.
         if not has_files then
-            if M.getSubfolderCover() then
+            local cover = nil
+            if has_subfolders and M.getRecursiveCover() then
+                cover = _findCoverRecursive(self.menu, dir_path, 1, 3, BookInfoManager)
+            end
+            if cover then
+                self:_setFolderCover(cover)
+            elseif M.getSubfolderCover() then
                 self:_setEmptyFolderCover()
             end
         end
