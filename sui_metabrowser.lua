@@ -22,6 +22,7 @@ local MetaChooser = FileChooser:extend{
     is_borderless = true,
     is_popout = false,
     title_bar_fm_style = true,
+    title_bar_left_icon = "chevron.left",
     return_arrow_propagation = true,
 }
 
@@ -191,6 +192,28 @@ end
 
 function MetaChooser:init()
     FileChooser.init(self)
+    if self.title_bar and self.title_bar.left_button then
+        local btn = self.title_bar.left_button
+        self._meta_back_offset = btn.overlap_offset and { btn.overlap_offset[1], btn.overlap_offset[2] } or nil
+    end
+    self:_updateBackButton()
+end
+
+function MetaChooser:_updateBackButton()
+    local tb = self.title_bar
+    local btn = tb and tb.left_button
+    if not btn then return end
+
+    if self._meta_back_offset then
+        btn.overlap_align = nil
+        btn.overlap_offset = { self._meta_back_offset[1], self._meta_back_offset[2] }
+    end
+
+    if self._meta_group then
+        btn.callback = function() self:onFolderUp() end
+    else
+        btn.callback = function() end
+    end
 end
 
 function MetaChooser:_showRoot()
@@ -200,6 +223,7 @@ function MetaChooser:_showRoot()
     self.paths = {}
     self:switchItemTable(self.title, _buildRootItems(self._meta_kind, self._meta_groups), 1, nil,
         BD.directory(filemanagerutil.abbreviate(self._meta_home)))
+    self:_updateBackButton()
 end
 
 function MetaChooser:_showGroup(group)
@@ -208,8 +232,10 @@ function MetaChooser:_showGroup(group)
         self:_showRoot()
     end
     self.paths = { true }
-    self:switchItemTable(T("%1 (%2)", group.value, #group.items), _buildBookItems(self._meta_kind, group), 1, nil,
+    local items = _buildBookItems(self._meta_kind, group)
+    self:switchItemTable(T("%1 (%2)", group.value, #items), items, 1, nil,
         group.value)
+    self:_updateBackButton()
 end
 
 function MetaChooser:refreshPath()
@@ -249,6 +275,10 @@ function MetaChooser:onFolderUp()
         self.close_callback()
         return true
     end
+end
+
+function MetaChooser:onLeftButtonTap()
+    return self:onFolderUp()
 end
 
 function MetaChooser:onFileSelect(item)
