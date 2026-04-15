@@ -143,6 +143,7 @@ msgid "Arrange Items"
 msgstr "Zmień kolejność ikon"
 
 #: sui_menu.lua:1582
+#: sui_menu.lua:1698
 msgid "Arrange Modules"
 msgstr "Zmień kolejność modułów"
 
@@ -308,6 +309,7 @@ msgstr "Według cyklu"
 #: sui_menu.lua:566
 #: sui_menu.lua:770
 #: sui_menu.lua:840
+#: sui_menu.lua:1503
 #: sui_menu.lua:1741
 #: sui_menu.lua:1776
 #: sui_foldercovers.lua:584
@@ -992,6 +994,7 @@ msgid "Number of Books in Folder"
 msgstr "Liczba książek w folderze"
 
 #: sui_menu.lua:1482
+#: sui_menu.lua:1496
 #: sui_menu.lua:2090
 msgid "Number of Pages"
 msgstr "Liczba stron"
@@ -1001,6 +1004,7 @@ msgid "Number of Pages in Title Bar Always"
 msgstr "Zawsze pokazuj liczbę stron na pasku tytułu"
 
 #: sui_quickactions.lua:501
+#: sui_menu.lua:1502
 msgid "OK"
 msgstr "OK"
 
@@ -1801,12 +1805,25 @@ msgstr ""
 "\n"
 "Zrestartować teraz?"
 
+#: sui_menu.lua:1654
+msgid "Cannot place modules after Page 1 separator.\nPage 1 must always have at least 1 module."
+msgstr "Nie można umieszczać modułów po separatorze Strony 1.\nStrona 1 musi zawsze mieć co najmniej 1 moduł."
+
+#: sui_menu.lua:1497
+msgid "Choose how many pages the homescreen has.\nEmpty pages stay empty. Modules keep their position."
+msgstr "Wybierz ile stron ma ekran główny.\nPuste strony pozostają puste. Moduły zachowują swoją pozycję."
+
 #: sui_menu.lua:1153
 msgid "Custom Title Bar will be %s after restart.\n\nRestart now?"
 msgstr ""
 "Niestandardowy pasek tytułu będzie %s po zrestartowaniu.\n"
 "\n"
 "Zrestartować teraz?"
+
+#: sui_menu.lua:1601
+#: sui_menu.lua:1661
+msgid "Enable at least 2 modules to arrange."
+msgstr "Włącz co najmniej 2 moduły, aby zmienić kolejność."
 
 #: sui_quickactions.lua:491
 msgid "Enter the Unicode codepoint (hex) of a Nerd Fonts symbol.\nYou can look up codes with wakamaifondue.com using the file:\n  /koreader/fonts/nerdfonts/symbols.ttf\nLeave blank and press OK to remove a Nerd Font icon."
@@ -1889,6 +1906,11 @@ msgstr ""
 #: sui_metabrowser.lua:41
 msgid "No series found."
 msgstr "Nie znaleziono cykli."
+
+#: sui_menu.lua:1623
+#: sui_menu.lua:1643
+msgid "Page %d"
+msgstr "Strona %d"
 
 #: sui_menu.lua:383
 msgid "Pagination bar hidden.\n\nRestart now?"
