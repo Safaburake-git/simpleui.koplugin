@@ -1819,7 +1819,7 @@ function M.install()
         end
 
         -- ── Series index badge (top-left, same style as pages badge) ──
-        if M.getOverlaySeries() and self.status ~= "complete" then
+        if M.getOverlaySeries() then
             local series_index = self._fc_series_index
             if not series_index and self.filepath then
                 local bi = BookInfoManager:getBookInfo(self.filepath, false)
