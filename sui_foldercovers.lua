@@ -996,9 +996,13 @@ local function _sgOpenGroup(file_chooser, group_item)
     local items       = group_item.series_items
 
     -- Persist state so refreshPath / updateItems can restore the view.
+    -- Save the parent page so we can return to it when the user presses back,
+    -- even after re-entering the series view via refreshPath (e.g. after closing a book).
+    local parent_page = file_chooser.page or 1
     _sg_current = {
         series_name    = group_item.text,
         parent_path    = parent_path,
+        parent_page    = parent_page,
         should_restore = false,
     }
 
@@ -1097,9 +1101,9 @@ local function _installSeriesGrouping()
             if _sg_current then
                 _sg_current.should_restore = true
             end
-            -- Reset the flag before changeToPath so the changeToPath hook
-            -- knows we are leaving a virtual folder intentionally.
-            fc.item_table._sg_is_series_view = false
+            -- NOTE: do NOT clear _sg_is_series_view here. The changeToPath hook
+            -- reads it to distinguish a series-exit from normal navigation.
+            -- changeToPath will clear it after preserving _sg_current.
             if parent then
                 fc:changeToPath(parent)
             end
@@ -1123,6 +1127,18 @@ local function _installSeriesGrouping()
                 -- keep _sg_current so updateItems can restore focus on the group.
                 if _sg_current then
                     _sg_current.should_restore = true
+                    -- Pre-seed path_items with the item index matching the series group,
+                    -- so KOReader's native changeToPath opens the right page directly.
+                    local saved_page = _sg_current.parent_page
+                    if saved_page and saved_page > 1 and fc.path_items and fc.perpage then
+                        -- Find the series item index to pass to KOReader as itemnumber.
+                        -- We do this after _sgProcessItemTable has already run so the
+                        -- grouped item_table is available via the switchItemTable hook.
+                        -- Instead, just seek via _sg_orig_changeToPath and let updateItems
+                        -- restore the focus; but ensure fc.page is pre-set so the render
+                        -- lands on the right page even if updateItems is called with 1.
+                        fc.page = saved_page
+                    end
                 end
             else
                 -- Navigating somewhere else entirely (Library tab → home, goHome,
@@ -1150,10 +1166,15 @@ local function _installSeriesGrouping()
         if not M.getSeriesGrouping() then return end
         if not _sg_current then return end
         -- The item_table was rebuilt by refreshPath; find the matching group.
-        local sname = _sg_current.series_name
+        local sname       = _sg_current.series_name
+        local saved_page  = _sg_current.parent_page  -- preserve across _sgOpenGroup
         for _, item in ipairs(fc.item_table or {}) do
             if item.is_series_group and item.text == sname then
                 _sgOpenGroup(fc, item)
+                -- Restore parent_page so back-button can return to the right page.
+                if _sg_current then
+                    _sg_current.parent_page = saved_page
+                end
                 return
             end
         end
